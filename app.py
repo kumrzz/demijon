@@ -4,14 +4,16 @@ import io
 import mimetypes
 import os
 import posixpath
+import secrets
 import shutil
+import time
 import urllib.parse
 import zipfile
 from functools import wraps
 from pathlib import Path
 from xml.etree.ElementTree import Element, SubElement, tostring
 
-from flask import Flask, Response, abort, jsonify, redirect, render_template_string, request, send_file, url_for
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, send_file, url_for
 
 
 app = Flask(__name__)
@@ -19,552 +21,15 @@ app = Flask(__name__)
 # Config via environment variables.
 DATA_ROOT = Path(os.environ.get("WEBDAV_ROOT", "./data")).resolve()
 AUTH_USER = os.environ.get("WEBDAV_USERNAME", "admin")
-AUTH_PASS = os.environ.get("WEBDAV_PASSWORD", "admin")
+AUTH_PASS = os.environ.get("WEBDAV_PASSWORD", "pass")
+UI_SESSION_COOKIE = "ui_session"
+UI_SESSION_TTL_SECONDS = 12 * 60 * 60
+UI_SESSIONS = {}
 
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
-
-
-INDEX_TEMPLATE = """
-<!doctype html>
-<html lang="en">
-<head>
-	<meta charset="utf-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1">
-	<title>Flask WebDAV</title>
-	<style>
-		:root {
-			--bg: #f7f4ea;
-			--panel: #ffffffcc;
-			--ink: #172121;
-			--ink-soft: #4a5759;
-			--accent: #5b8e7d;
-			--accent-2: #bc4b51;
-			--line: #d6d2c4;
-		}
-		* { box-sizing: border-box; }
-		body {
-			margin: 0;
-			min-height: 100vh;
-			font-family: "Avenir Next", "Trebuchet MS", "Segoe UI", sans-serif;
-			color: var(--ink);
-			background:
-				radial-gradient(circle at 10% -10%, #f9d8b444 0, transparent 40%),
-				radial-gradient(circle at 90% 0%, #86a59c44 0, transparent 35%),
-				var(--bg);
-			padding: 1.2rem;
-		}
-		.wrap {
-			max-width: 980px;
-			margin: 0 auto;
-			background: var(--panel);
-			border: 1px solid var(--line);
-			border-radius: 16px;
-			backdrop-filter: blur(6px);
-			box-shadow: 0 14px 50px #00000017;
-			overflow: hidden;
-		}
-		header {
-			background: linear-gradient(110deg, #5b8e7d, #3d6b6f);
-			color: #fff;
-			padding: 1.2rem;
-		}
-		h1 {
-			margin: 0;
-			font-size: clamp(1.25rem, 2.8vw, 2rem);
-			letter-spacing: 0.02em;
-		}
-		.sub {
-			margin-top: 0.4rem;
-			opacity: 0.92;
-			font-size: 0.95rem;
-		}
-		.grid {
-			display: grid;
-			grid-template-columns: 1fr;
-			gap: 1rem;
-			padding: 1rem;
-		}
-		@media (min-width: 900px) {
-			.grid {
-				grid-template-columns: 2fr 1fr;
-			}
-		}
-		.panel {
-			border: 1px solid var(--line);
-			border-radius: 12px;
-			background: #fff;
-			overflow: hidden;
-		}
-		.panel h2 {
-			margin: 0;
-			font-size: 1rem;
-			padding: 0.8rem 1rem;
-			border-bottom: 1px solid var(--line);
-			background: #faf9f4;
-		}
-		.files {
-			width: 100%;
-			border-collapse: collapse;
-			font-size: 0.95rem;
-		}
-		.files th, .files td {
-			text-align: left;
-			border-bottom: 1px solid #ece8dc;
-			padding: 0.62rem;
-			vertical-align: middle;
-		}
-		.files th { color: var(--ink-soft); font-weight: 600; }
-		.pill {
-			display: inline-block;
-			padding: 0.14rem 0.5rem;
-			border-radius: 999px;
-			border: 1px solid #d5e4df;
-			background: #f1f9f6;
-			color: #285143;
-			font-size: 0.8rem;
-			font-weight: 700;
-		}
-		.form {
-			padding: 0.8rem 1rem 1rem;
-			border-top: 1px solid #f0ede2;
-		}
-		.dropzone {
-			margin-top: 0.6rem;
-			border: 2px dashed #89a89e;
-			background: #f7fcf9;
-			border-radius: 12px;
-			padding: 0.85rem;
-			text-align: center;
-			color: #355e4f;
-			font-size: 0.9rem;
-			transition: background .2s ease, border-color .2s ease, transform .1s ease;
-		}
-		.dropzone.active {
-			background: #ecf8f1;
-			border-color: #3d6b6f;
-			transform: translateY(-1px);
-		}
-		.dropzone-status {
-			margin-top: 0.5rem;
-			font-size: 0.82rem;
-			color: #4a5759;
-		}
-		.folder-upload-details {
-			margin-top: 0.55rem;
-			border: 1px solid #dde5e1;
-			border-radius: 10px;
-			padding: 0.45rem 0.55rem;
-			background: #fbfdfc;
-		}
-		.folder-upload-details summary {
-			cursor: pointer;
-			font-size: 0.88rem;
-			font-weight: 700;
-			color: #3d6b6f;
-			list-style: none;
-		}
-		.folder-upload-details summary::-webkit-details-marker {
-			display: none;
-		}
-		.folder-upload-details summary::before {
-			content: ">";
-			display: inline-block;
-			margin-right: 0.4rem;
-			transition: transform .16s ease;
-		}
-		.folder-upload-details[open] summary::before {
-			transform: rotate(90deg);
-		}
-		.folder-upload-fields {
-			margin-top: 0.5rem;
-		}
-		.upload-results {
-			margin-top: 0.7rem;
-			border: 1px solid #d8e4dd;
-			background: #fbfdfc;
-			border-radius: 10px;
-			padding: 0.55rem 0.65rem;
-			max-height: 240px;
-			overflow: auto;
-		}
-		.upload-results .title {
-			font-size: 0.82rem;
-			font-weight: 700;
-			color: #3b5052;
-			margin-bottom: 0.35rem;
-		}
-		.upload-results ul {
-			margin: 0;
-			padding: 0;
-			list-style: none;
-		}
-		.upload-results li {
-			font-size: 0.82rem;
-			padding: 0.22rem 0;
-			border-bottom: 1px dashed #e8ecea;
-		}
-		.upload-results li:last-child {
-			border-bottom: 0;
-		}
-		.upload-ok {
-			color: #236845;
-		}
-		.upload-fail {
-			color: #8c2f39;
-		}
-		.upload-pending {
-			color: #4a5759;
-		}
-		label {
-			display: block;
-			margin: 0.45rem 0 0.25rem;
-			color: var(--ink-soft);
-			font-size: 0.86rem;
-			font-weight: 600;
-		}
-		input[type="text"], input[type="file"] {
-			width: 100%;
-			padding: 0.55rem 0.65rem;
-			border: 1px solid var(--line);
-			border-radius: 10px;
-			font-size: 0.93rem;
-			background: #fff;
-		}
-		.btn {
-			margin-top: 0.65rem;
-			width: 100%;
-			padding: 0.58rem 0.8rem;
-			border: 0;
-			border-radius: 10px;
-			color: #fff;
-			font-weight: 700;
-			cursor: pointer;
-			background: linear-gradient(120deg, #3d6b6f, #5b8e7d);
-			transition: transform .12s ease, filter .15s ease;
-		}
-		.btn:hover { filter: brightness(1.03); }
-		.btn:active { transform: translateY(1px); }
-		.btn-danger { background: linear-gradient(120deg, #bc4b51, #8c2f39); }
-		.small {
-			color: #6a6f73;
-			font-size: 0.82rem;
-			margin-top: 0.6rem;
-			line-height: 1.4;
-		}
-		a { color: #134f5c; text-decoration: none; }
-		a:hover { text-decoration: underline; }
-		.row-actions form { display: inline; }
-	</style>
-</head>
-<body>
-	<div class="wrap">
-		<header>
-			<h1>Flask WebDAV + Web UI</h1>
-			<div class="sub">Current path: /{{ current_path }}</div>
-			<div class="sub">WebDAV base URL: {{ webdav_base }}</div>
-		</header>
-
-		<div class="grid">
-			<section class="panel">
-				<h2>Files & Folders</h2>
-				<table class="files">
-					<thead>
-						<tr>
-							<th>Name</th>
-							<th>Type</th>
-							<th>Size</th>
-							<th>Modified</th>
-							<th>Actions</th>
-						</tr>
-					</thead>
-					<tbody>
-						{% if parent_path is not none %}
-							<tr>
-								<td><a href="{{ url_for('ui_list', subpath=parent_path) }}">.. (parent)</a></td>
-								<td><span class="pill">dir</span></td>
-								<td>-</td>
-								<td>-</td>
-								<td>-</td>
-							</tr>
-						{% endif %}
-						{% for e in entries %}
-							<tr>
-								{% if e.is_dir %}
-									<td><a href="{{ url_for('ui_list', subpath=e.rel_path) }}">{{ e.name }}</a></td>
-									<td><span class="pill">dir</span></td>
-									<td>-</td>
-								{% else %}
-									<td>{{ e.name }}</td>
-									<td>file</td>
-									<td>{{ e.size }}</td>
-								{% endif %}
-								<td>{{ e.mtime }}</td>
-								<td class="row-actions">
-									{% if e.is_dir %}
-										<a href="{{ url_for('ui_download_folder', folder_path=e.rel_path) }}">download zip</a>
-									{% else %}
-										<a href="{{ url_for('ui_download', file_path=e.rel_path) }}">download</a>
-									{% endif %}
-									<form action="{{ url_for('ui_delete') }}" method="post">
-										<input type="hidden" name="target" value="{{ e.rel_path }}">
-										<input type="hidden" name="current_path" value="{{ current_path }}">
-										<button class="btn btn-danger" style="width:auto;padding:.35rem .55rem;margin:0 0 0 .5rem;">delete</button>
-									</form>
-								</td>
-							</tr>
-						{% endfor %}
-					</tbody>
-				</table>
-			</section>
-
-			<aside class="panel">
-				<h2>Operations</h2>
-				<form class="form" id="uploadForm" action="{{ url_for('ui_upload') }}" method="post" enctype="multipart/form-data">
-					<input type="hidden" name="current_path" value="{{ current_path }}">
-					<label for="upload_file">Upload files (multiple)</label>
-					<input id="upload_file" type="file" name="files" multiple>
-					<details class="folder-upload-details">
-						<summary>Upload folder</summary>
-						<div class="folder-upload-fields">
-							<label for="upload_folder">Choose folder files</label>
-							<input id="upload_folder" type="file" name="folder_files" webkitdirectory directory multiple>
-						</div>
-					</details>
-					<div id="dropzone" class="dropzone">
-						Drag and drop files or folders here
-						<div class="dropzone-status" id="dropzoneStatus">No dropped items yet</div>
-					</div>
-					<div class="upload-results" id="uploadResults" style="display:none;">
-						<div class="title">Upload Status</div>
-						<ul id="uploadResultsList"></ul>
-					</div>
-					<button class="btn" type="submit">Upload Selection</button>
-				</form>
-
-				<form class="form" action="{{ url_for('ui_mkdir') }}" method="post">
-					<input type="hidden" name="current_path" value="{{ current_path }}">
-					<label for="folder_name">Create folder</label>
-					<input id="folder_name" type="text" name="folder_name" placeholder="example-folder" required>
-					<button class="btn" type="submit">Create Folder</button>
-				</form>
-
-				<div class="form small">
-					WebDAV clients can connect to the same host and use the root path. Supported methods include PROPFIND, PUT, MKCOL, DELETE, COPY and MOVE.
-				</div>
-			</aside>
-		</div>
-	</div>
-	<script>
-		(function () {
-			const form = document.getElementById("uploadForm");
-			const dropzone = document.getElementById("dropzone");
-			const status = document.getElementById("dropzoneStatus");
-			const fileInput = document.getElementById("upload_file");
- 			const folderInput = document.getElementById("upload_folder");
-			const resultsBox = document.getElementById("uploadResults");
-			const resultsList = document.getElementById("uploadResultsList");
-
-			if (!form || !dropzone || !status || !fileInput || !folderInput || !resultsBox || !resultsList) {
-				return;
-			}
-
-			const droppedFiles = [];
-
-			function setStatus() {
-				if (droppedFiles.length === 0) {
-					status.textContent = "No dropped items yet";
-					return;
-				}
-				status.textContent = "Dropped " + droppedFiles.length + " item(s). They will be uploaded when you submit.";
-			}
-
-			function showResults(items, summary, hasFailures) {
-				resultsList.innerHTML = "";
-				resultsBox.style.display = "block";
-
-				const summaryLine = document.createElement("li");
-				summaryLine.className = hasFailures ? "upload-fail" : "upload-ok";
-				summaryLine.textContent = summary;
-				resultsList.appendChild(summaryLine);
-
-				for (const item of items) {
-					const row = document.createElement("li");
-					row.className = item.ok ? "upload-ok" : "upload-fail";
-					const icon = item.ok ? "OK" : "FAIL";
-					row.textContent = "[" + icon + "] " + item.source_name + " -> " + item.saved_as + " : " + item.message;
-					resultsList.appendChild(row);
-				}
-			}
-
-			function showPendingSummary() {
-				const pickerCount = (fileInput.files ? fileInput.files.length : 0) + (folderInput.files ? folderInput.files.length : 0);
-				const total = pickerCount + droppedFiles.length;
-				if (!total) {
-					resultsBox.style.display = "none";
-					return false;
-				}
-				resultsBox.style.display = "block";
-				resultsList.innerHTML = "";
-				const line = document.createElement("li");
-				line.className = "upload-pending";
-				line.textContent = "Uploading " + total + " item(s)...";
-				resultsList.appendChild(line);
-				return true;
-			}
-
-			function addFile(file, relativePath) {
-				if (relativePath) {
-					Object.defineProperty(file, "webkitRelativePath", {
-						value: relativePath,
-						configurable: true
-					});
-				}
-				droppedFiles.push(file);
-			}
-
-			async function traverseEntry(entry, parentPath) {
-				if (entry.isFile) {
-					await new Promise((resolve) => {
-						entry.file((file) => {
-							const rel = parentPath ? parentPath + "/" + file.name : file.name;
-							addFile(file, rel);
-							resolve();
-						});
-					});
-					return;
-				}
-
-				if (!entry.isDirectory) {
-					return;
-				}
-
-				const dirReader = entry.createReader();
-				const dirPath = parentPath ? parentPath + "/" + entry.name : entry.name;
-				while (true) {
-					const entries = await new Promise((resolve) => dirReader.readEntries(resolve));
-					if (!entries.length) {
-						break;
-					}
-					for (const child of entries) {
-						await traverseEntry(child, dirPath);
-					}
-				}
-			}
-
-			async function ingestDrop(dataTransfer) {
-				const items = Array.from(dataTransfer.items || []);
-				if (!items.length) {
-					for (const f of Array.from(dataTransfer.files || [])) {
-						addFile(f, "");
-					}
-					setStatus();
-					return;
-				}
-
-				for (const item of items) {
-					if (item.kind !== "file") {
-						continue;
-					}
-					const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
-					if (entry) {
-						await traverseEntry(entry, "");
-					} else {
-						const file = item.getAsFile();
-						if (file) {
-							addFile(file, "");
-						}
-					}
-				}
-				setStatus();
-			}
-
-			["dragenter", "dragover"].forEach((eventName) => {
-				dropzone.addEventListener(eventName, (e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					dropzone.classList.add("active");
-				});
-			});
-
-			["dragleave", "drop"].forEach((eventName) => {
-				dropzone.addEventListener(eventName, (e) => {
-					e.preventDefault();
-					e.stopPropagation();
-					dropzone.classList.remove("active");
-				});
-			});
-
-			dropzone.addEventListener("drop", async (e) => {
-				await ingestDrop(e.dataTransfer);
-			});
-
-			form.addEventListener("submit", (e) => {
-				e.preventDefault();
-				if (!showPendingSummary()) {
-					return;
-				}
-				const fd = new FormData(form);
-				for (const file of droppedFiles) {
-					if (file.webkitRelativePath) {
-						fd.append("folder_files", file, file.webkitRelativePath);
-					} else {
-						fd.append("files", file, file.name);
-					}
-				}
-
-				fetch(form.action, {
-					method: "POST",
-					body: fd,
-					credentials: "same-origin",
-					headers: {
-						"X-Requested-With": "XMLHttpRequest",
-						"Accept": "application/json"
-					}
-				}).then(async (resp) => {
-					let data = null;
-					try {
-						data = await resp.json();
-					} catch (err) {
-						showResults([], "Upload failed: server returned non-JSON response.", true);
-						return;
-					}
-
-					const results = Array.isArray(data.results) ? data.results : [];
-					const summary = data.summary || "Upload completed.";
-					const failCount = Number(data.failed || 0);
-					showResults(results, summary, failCount > 0 || !resp.ok);
-
-					if (resp.ok && failCount === 0) {
-						setTimeout(() => {
-							window.location.reload();
-						}, 800);
-					}
-				}).catch(() => {
-					showResults([], "Upload failed: network or server error.", true);
-				});
-			});
-
-			fileInput.addEventListener("change", () => {
-				if (fileInput.files && fileInput.files.length > 0) {
-					status.textContent = "Selected " + fileInput.files.length + " file(s) from file picker.";
-				}
-			});
-
-			folderInput.addEventListener("change", () => {
-				if (folderInput.files && folderInput.files.length > 0) {
-					status.textContent = "Selected folder content with " + folderInput.files.length + " file(s).";
-				}
-			});
-		})();
-	</script>
-</body>
-</html>
-"""
-
-
-def _auth_failed() -> Response:
-		response = Response("Authentication required", status=401)
-		response.headers["WWW-Authenticate"] = 'Basic realm="Flask-WebDAV"'
+def _auth_failed(message: str = "Authentication required", realm: str = "Flask-WebDAV") -> Response:
+		response = Response(message, status=401)
+		response.headers["WWW-Authenticate"] = f'Basic realm="{realm}"'
 		return response
 
 
@@ -583,12 +48,76 @@ def _check_basic_auth() -> bool:
 		return username == AUTH_USER and password == AUTH_PASS
 
 
+def _check_user_password(username: str, password: str) -> bool:
+		return username == AUTH_USER and password == AUTH_PASS
+
+
+def _cleanup_ui_sessions() -> None:
+		now = int(time.time())
+		expired = [token for token, payload in UI_SESSIONS.items() if payload.get("expires_at", 0) <= now]
+		for token in expired:
+				UI_SESSIONS.pop(token, None)
+
+
+def _create_ui_session(username: str) -> str:
+		_cleanup_ui_sessions()
+		token = secrets.token_urlsafe(32)
+		UI_SESSIONS[token] = {
+				"username": username,
+				"expires_at": int(time.time()) + UI_SESSION_TTL_SECONDS,
+		}
+		return token
+
+
+def _get_ui_session_username() -> str | None:
+		_cleanup_ui_sessions()
+		token = request.cookies.get(UI_SESSION_COOKIE, "")
+		if not token:
+				return None
+		session_info = UI_SESSIONS.get(token)
+		if not session_info:
+				return None
+		return session_info.get("username")
+
+
+def _set_ui_cookie(response: Response, token: str) -> Response:
+		response.set_cookie(
+				UI_SESSION_COOKIE,
+				token,
+				max_age=UI_SESSION_TTL_SECONDS,
+				httponly=True,
+				samesite="Lax",
+		)
+		return response
+
+
+def _clear_ui_cookie(response: Response) -> Response:
+		response.delete_cookie(UI_SESSION_COOKIE)
+		return response
+
+
 def requires_auth(fn):
 		@wraps(fn)
 		def wrapper(*args, **kwargs):
 				if not _check_basic_auth():
 						return _auth_failed()
 				return fn(*args, **kwargs)
+
+		return wrapper
+
+
+def requires_ui_auth(fn):
+		@wraps(fn)
+		def wrapper(*args, **kwargs):
+				username = _get_ui_session_username()
+				if username:
+						return fn(*args, **kwargs)
+
+				if request.headers.get("X-Requested-With", "") == "XMLHttpRequest":
+						return jsonify({"ok": False, "summary": "Not authenticated"}), 401
+
+				next_path = request.full_path if request.full_path else request.path
+				return redirect(url_for("ui_login", next=next_path))
 
 		return wrapper
 
@@ -772,9 +301,33 @@ def _store_uploaded_file(upload, target_dir: Path, rel_path: str, preserve_tree:
 				}
 
 
+@app.get("/ui/login")
+def ui_login():
+		next_path = request.args.get("next", "/ui/")
+		if not next_path.startswith("/ui"):
+				next_path = "/ui/"
+		return render_template("login.html", next_path=next_path, error=None)
+
+
+@app.post("/ui/login")
+def ui_login_post():
+		username = request.form.get("username", "")
+		password = request.form.get("password", "")
+		next_path = request.form.get("next", "/ui/")
+		if not next_path.startswith("/ui"):
+				next_path = "/ui/"
+
+		if not _check_user_password(username, password):
+				return render_template("login.html", next_path=next_path, error="Invalid username or password"), 401
+
+		token = _create_ui_session(username)
+		response = redirect(next_path)
+		return _set_ui_cookie(response, token)
+
+
 @app.route("/ui/")
 @app.route("/ui/<path:subpath>")
-@requires_auth
+@requires_ui_auth
 def ui_list(subpath: str = ""):
 		rel_path = _to_safe_rel_path(subpath)
 		current = _full_path(rel_path)
@@ -792,8 +345,8 @@ def ui_list(subpath: str = ""):
 				if parent_path == ".":
 						parent_path = ""
 
-		return render_template_string(
-				INDEX_TEMPLATE,
+		return render_template(
+				"index.html",
 				current_path=rel_path,
 				parent_path=parent_path,
 				entries=entries,
@@ -801,8 +354,19 @@ def ui_list(subpath: str = ""):
 		)
 
 
+@app.get("/ui/logoff")
+def ui_logoff():
+		token = request.cookies.get(UI_SESSION_COOKIE, "")
+		if token:
+				UI_SESSIONS.pop(token, None)
+		response = redirect(url_for("ui_login", next="/ui/"))
+		_clear_ui_cookie(response)
+		response.headers["Cache-Control"] = "no-store"
+		return response
+
+
 @app.post("/ui/upload")
-@requires_auth
+@requires_ui_auth
 def ui_upload():
 		rel_path = _to_safe_rel_path(request.form.get("current_path", ""))
 		target_dir = _full_path(rel_path)
@@ -847,7 +411,7 @@ def ui_upload():
 
 
 @app.post("/ui/mkdir")
-@requires_auth
+@requires_ui_auth
 def ui_mkdir():
 		rel_path = _to_safe_rel_path(request.form.get("current_path", ""))
 		folder_name = request.form.get("folder_name", "").strip()
@@ -861,7 +425,7 @@ def ui_mkdir():
 
 
 @app.post("/ui/delete")
-@requires_auth
+@requires_ui_auth
 def ui_delete():
 		target_rel = _to_safe_rel_path(request.form.get("target", ""))
 		current_rel = _to_safe_rel_path(request.form.get("current_path", ""))
@@ -873,7 +437,7 @@ def ui_delete():
 
 
 @app.get("/ui/download/<path:file_path>")
-@requires_auth
+@requires_ui_auth
 def ui_download(file_path: str):
 		rel_path = _to_safe_rel_path(file_path)
 		full = _full_path(rel_path)
@@ -883,7 +447,7 @@ def ui_download(file_path: str):
 
 
 @app.get("/ui/download-folder/<path:folder_path>")
-@requires_auth
+@requires_ui_auth
 def ui_download_folder(folder_path: str):
 		rel_path = _to_safe_rel_path(folder_path)
 		full = _full_path(rel_path)
