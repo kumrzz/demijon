@@ -1,0 +1,770 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Flask WebDAV</title>
+	<style>
+		:root {
+			--bg: #edf3fe;
+			--surface: #ffffff;
+			--surface-soft: #f7faff;
+			--line: #d8e3f7;
+			--ink: #142746;
+			--ink-soft: #5b7093;
+			--brand-1: #0f56d9;
+			--brand-2: #2f7dff;
+			--brand-3: #dce9ff;
+			--ok: #0b7a42;
+			--fail: #a4283f;
+		}
+		:root[data-theme="dark"] {
+			--bg: #0f1726;
+			--surface: #172337;
+			--surface-soft: #1d2b43;
+			--line: #30435f;
+			--ink: #eaf2ff;
+			--ink-soft: #a8bbd8;
+			--brand-1: #3c8cff;
+			--brand-2: #2f7dff;
+			--brand-3: #223a63;
+			--ok: #52d38e;
+			--fail: #ff7b98;
+		}
+		* { box-sizing: border-box; }
+		body {
+			margin: 0;
+			min-height: 100vh;
+			font-family: "Nunito Sans", "Segoe UI", sans-serif;
+			color: var(--ink);
+			background:
+				linear-gradient(160deg, #f5f9ff 0%, #eef4ff 48%, #e8f0ff 100%);
+		}
+		:root[data-theme="dark"] body {
+			background: linear-gradient(160deg, #121b2c 0%, #101a2b 48%, #0d1423 100%);
+		}
+		.app {
+			display: grid;
+			grid-template-columns: 250px 1fr;
+			min-height: 100vh;
+		}
+		.sidebar {
+			background: linear-gradient(180deg, #0f4ec7, #0c3e9e);
+			color: #fff;
+			padding: 1rem 0.9rem;
+			display: flex;
+			flex-direction: column;
+			gap: 1rem;
+		}
+		:root[data-theme="dark"] .sidebar {
+			background: linear-gradient(180deg, #173d81, #132f66);
+		}
+		.logo {
+			padding: 0.3rem 0.45rem;
+		}
+		.logo-title {
+			margin: 0;
+			font-size: 1.12rem;
+			font-weight: 800;
+			letter-spacing: 0.01em;
+		}
+		.logo-sub {
+			margin-top: 0.3rem;
+			font-size: 0.82rem;
+			opacity: 0.88;
+		}
+		.nav {
+			background: #ffffff14;
+			border: 1px solid #ffffff26;
+			border-radius: 12px;
+			padding: 0.5rem;
+		}
+		.nav-item {
+			display: block;
+			padding: 0.56rem 0.62rem;
+			border-radius: 9px;
+			color: #e7efff;
+			font-size: 0.9rem;
+			font-weight: 700;
+			text-decoration: none;
+		}
+		.nav-item.active {
+			background: #ffffff2d;
+			color: #fff;
+		}
+		.nav-item:hover { background: #ffffff26; }
+		.sidebar-meta {
+			margin-top: auto;
+			font-size: 0.78rem;
+			line-height: 1.45;
+			opacity: 0.9;
+			padding: 0.65rem;
+			border: 1px solid #ffffff2d;
+			border-radius: 11px;
+			background: #00000014;
+		}
+		.main {
+			display: flex;
+			flex-direction: column;
+			min-width: 0;
+		}
+		.topbar {
+			height: 66px;
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			padding: 0.8rem 1.1rem;
+			background: #ffffffde;
+			backdrop-filter: blur(4px);
+			border-bottom: 1px solid var(--line);
+			position: sticky;
+			top: 0;
+			z-index: 10;
+		}
+		:root[data-theme="dark"] .topbar {
+			background: #172337e3;
+		}
+		.page-title {
+			margin: 0;
+			font-size: 1.08rem;
+			font-weight: 800;
+		}
+		.page-sub {
+			margin-top: 0.2rem;
+			font-size: 0.83rem;
+			color: var(--ink-soft);
+		}
+		.top-actions {
+			display: flex;
+			align-items: center;
+			gap: 0.6rem;
+		}
+		.logout-link {
+			display: inline-block;
+			padding: 0.48rem 0.72rem;
+			border-radius: 10px;
+			border: 1px solid var(--line);
+			background: #fff;
+			color: #274977;
+			font-size: 0.84rem;
+			font-weight: 700;
+			text-decoration: none;
+		}
+		.logout-link:hover { background: #f3f7ff; }
+		:root[data-theme="dark"] .logout-link {
+			background: #21324b;
+			color: #d7e8ff;
+		}
+		:root[data-theme="dark"] .logout-link:hover { background: #2a3e5c; }
+		.theme-toggle {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0.48rem 0.72rem;
+			border-radius: 10px;
+			border: 1px solid var(--line);
+			background: var(--surface);
+			color: var(--ink);
+			font-size: 0.84rem;
+			font-weight: 700;
+			cursor: pointer;
+		}
+		.theme-toggle:hover {
+			background: var(--surface-soft);
+		}
+		.canvas {
+			padding: 1rem;
+			display: grid;
+			grid-template-columns: 1fr;
+			gap: 1rem;
+		}
+		@media (min-width: 1100px) {
+			.canvas {
+				grid-template-columns: minmax(0, 1fr) 340px;
+			}
+		}
+		.panel {
+			background: var(--surface);
+			border: 1px solid var(--line);
+			border-radius: 14px;
+			overflow: hidden;
+			box-shadow: 0 10px 30px #1d53a20d;
+		}
+		.panel-title {
+			padding: 0.86rem 0.95rem;
+			border-bottom: 1px solid var(--line);
+			background: var(--surface-soft);
+			font-size: 0.97rem;
+			font-weight: 800;
+		}
+		.files {
+			width: 100%;
+			border-collapse: collapse;
+			font-size: 0.92rem;
+		}
+		.files th, .files td {
+			text-align: left;
+			border-bottom: 1px solid #ebf1fc;
+			padding: 0.58rem 0.62rem;
+			vertical-align: middle;
+		}
+		.files th {
+			font-size: 0.79rem;
+			letter-spacing: 0.02em;
+			text-transform: uppercase;
+			color: #667ea5;
+			font-weight: 700;
+		}
+		.files tbody tr:hover { background: #f8fbff; }
+		:root[data-theme="dark"] .files tbody tr:hover { background: #22324b; }
+		.files a {
+			color: #1a4fba;
+			text-decoration: none;
+			font-weight: 700;
+		}
+		.files a:hover { text-decoration: underline; }
+		.pill {
+			display: inline-block;
+			padding: 0.14rem 0.5rem;
+			border-radius: 999px;
+			border: 1px solid #c9d9fb;
+			background: var(--brand-3);
+			color: #174ba9;
+			font-size: 0.74rem;
+			font-weight: 700;
+		}
+		.row-actions {
+			white-space: nowrap;
+		}
+		.row-actions form { display: inline; }
+		.row-actions .delete-btn {
+			display: inline-block;
+			margin-left: 0.45rem;
+			padding: 0.31rem 0.5rem;
+			border: 1px solid #f0c4cf;
+			border-radius: 8px;
+			background: #fff2f4;
+			color: #8c2f39;
+			font-size: 0.75rem;
+			font-weight: 700;
+			cursor: pointer;
+		}
+		:root[data-theme="dark"] .row-actions .delete-btn {
+			border-color: #6e3342;
+			background: #40232d;
+			color: #ffb7c6;
+		}
+		.form {
+			padding: 0.85rem 0.95rem 0.95rem;
+			border-top: 1px solid #edf2fc;
+		}
+		label {
+			display: block;
+			margin: 0.45rem 0 0.24rem;
+			color: var(--ink-soft);
+			font-size: 0.82rem;
+			font-weight: 700;
+		}
+		input[type="text"], input[type="file"] {
+			width: 100%;
+			padding: 0.58rem 0.62rem;
+			border: 1px solid #cfdcf4;
+			border-radius: 10px;
+			font-size: 0.9rem;
+			background: #fff;
+		}
+		:root[data-theme="dark"] input[type="text"],
+		:root[data-theme="dark"] input[type="file"] {
+			background: #1c2b43;
+			border-color: #375276;
+			color: var(--ink);
+		}
+		.btn {
+			margin-top: 0.62rem;
+			width: 100%;
+			padding: 0.6rem 0.82rem;
+			border: 0;
+			border-radius: 10px;
+			color: #fff;
+			font-weight: 800;
+			cursor: pointer;
+			background: linear-gradient(120deg, var(--brand-1), var(--brand-2));
+		}
+		.folder-upload-details {
+			margin-top: 0.58rem;
+			border: 1px solid #d5e1f7;
+			border-radius: 10px;
+			padding: 0.45rem 0.55rem;
+			background: #f8fbff;
+		}
+		.folder-upload-details summary {
+			cursor: pointer;
+			font-size: 0.84rem;
+			font-weight: 800;
+			color: #204d9e;
+			list-style: none;
+		}
+		.folder-upload-details summary::-webkit-details-marker { display: none; }
+		.folder-upload-details summary::before {
+			content: ">";
+			display: inline-block;
+			margin-right: 0.38rem;
+			transition: transform .16s ease;
+		}
+		.folder-upload-details[open] summary::before { transform: rotate(90deg); }
+		.folder-upload-fields { margin-top: 0.5rem; }
+		.dropzone {
+			margin-top: 0.62rem;
+			border: 2px dashed #7fa6eb;
+			background: #f3f8ff;
+			border-radius: 12px;
+			padding: 0.85rem;
+			text-align: center;
+			color: #2452a7;
+			font-size: 0.87rem;
+			transition: background .2s ease, border-color .2s ease, transform .1s ease;
+		}
+		.dropzone.active {
+			background: #e8f1ff;
+			border-color: #2b72ef;
+			transform: translateY(-1px);
+		}
+		.dropzone-status {
+			margin-top: 0.45rem;
+			font-size: 0.8rem;
+			color: #4a6898;
+		}
+		.upload-results {
+			margin-top: 0.7rem;
+			border: 1px solid #d7e3f8;
+			background: #f8fbff;
+			border-radius: 10px;
+			padding: 0.5rem 0.62rem;
+			max-height: 240px;
+			overflow: auto;
+		}
+		.upload-results .title {
+			font-size: 0.8rem;
+			font-weight: 800;
+			color: #3d5b8b;
+			margin-bottom: 0.32rem;
+		}
+		.upload-results ul {
+			margin: 0;
+			padding: 0;
+			list-style: none;
+		}
+		.upload-results li {
+			font-size: 0.8rem;
+			padding: 0.22rem 0;
+			border-bottom: 1px dashed #dfebff;
+		}
+		.upload-results li:last-child { border-bottom: 0; }
+		.upload-ok { color: var(--ok); }
+		.upload-fail { color: var(--fail); }
+		.upload-pending { color: #4d6791; }
+		.small {
+			color: #5a7197;
+			font-size: 0.8rem;
+			line-height: 1.45;
+		}
+		:root[data-theme="dark"] .dropzone {
+			border-color: #4f75b8;
+			background: #1c2c46;
+			color: #9dc0ff;
+		}
+		:root[data-theme="dark"] .dropzone.active {
+			background: #24385a;
+			border-color: #6fa4ff;
+		}
+		:root[data-theme="dark"] .upload-results {
+			border-color: #38517a;
+			background: #1c2b43;
+		}
+		:root[data-theme="dark"] .folder-upload-details {
+			border-color: #375277;
+			background: #1c2b43;
+		}
+		:root[data-theme="dark"] .folder-upload-details summary {
+			color: #8fbbff;
+		}
+		:root[data-theme="dark"] .small {
+			color: #90a9cc;
+		}
+		@media (max-width: 900px) {
+			.app {
+				grid-template-columns: 1fr;
+			}
+			.sidebar {
+				padding: 0.8rem;
+				gap: 0.6rem;
+			}
+			.nav {
+				display: grid;
+				grid-template-columns: repeat(3, minmax(0, 1fr));
+				gap: 0.35rem;
+			}
+			.sidebar-meta { display: none; }
+			.topbar {
+				height: auto;
+				padding: 0.75rem 0.85rem;
+				flex-wrap: wrap;
+			}
+		}
+	</style>
+</head>
+<body>
+	<div class="app">
+		<aside class="sidebar">
+			<div class="logo">
+				<h1 class="logo-title">OpenCloud Style UI</h1>
+				<div class="logo-sub">Flask WebDAV</div>
+			</div>
+			<nav class="nav">
+				<a class="nav-item active" href="{{ url_for('ui_list', subpath=current_path) }}">Files</a>
+				<a class="nav-item" href="{{ webdav_base }}" target="_blank" rel="noopener">WebDAV Root</a>
+				<a class="nav-item" href="{{ url_for('ui_logoff') }}">Log off</a>
+			</nav>
+			<div class="sidebar-meta">
+				Current path: /{{ current_path }}<br>
+				Mounted endpoint: {{ webdav_base }}
+			</div>
+		</aside>
+
+		<main class="main">
+			<header class="topbar">
+				<div>
+					<h2 class="page-title">Personal Files</h2>
+					<div class="page-sub">Browse, upload and manage your WebDAV storage</div>
+				</div>
+				<div class="top-actions">
+					<button class="theme-toggle" id="themeToggle" type="button">Dark mode</button>
+					<a class="logout-link" href="{{ url_for('ui_logoff') }}">Log off</a>
+				</div>
+			</header>
+
+			<div class="canvas">
+				<section class="panel">
+					<div class="panel-title">Files & Folders</div>
+					<table class="files">
+						<thead>
+							<tr>
+								<th>Name</th>
+								<th>Type</th>
+								<th>Size</th>
+								<th>Modified</th>
+								<th>Actions</th>
+							</tr>
+						</thead>
+						<tbody>
+							{% if parent_path is not none %}
+								<tr>
+									<td><a href="{{ url_for('ui_list', subpath=parent_path) }}">.. (parent)</a></td>
+									<td><span class="pill">dir</span></td>
+									<td>-</td>
+									<td>-</td>
+									<td>-</td>
+								</tr>
+							{% endif %}
+							{% for e in entries %}
+								<tr>
+									{% if e.is_dir %}
+										<td><a href="{{ url_for('ui_list', subpath=e.rel_path) }}">{{ e.name }}</a></td>
+										<td><span class="pill">dir</span></td>
+										<td>-</td>
+									{% else %}
+										<td>{{ e.name }}</td>
+										<td>file</td>
+										<td>{{ e.size }}</td>
+									{% endif %}
+									<td>{{ e.mtime }}</td>
+									<td class="row-actions">
+										{% if e.is_dir %}
+											<a href="{{ url_for('ui_download_folder', folder_path=e.rel_path) }}">download zip</a>
+										{% else %}
+											<a href="{{ url_for('ui_download', file_path=e.rel_path) }}">download</a>
+										{% endif %}
+										<form action="{{ url_for('ui_delete') }}" method="post">
+											<input type="hidden" name="target" value="{{ e.rel_path }}">
+											<input type="hidden" name="current_path" value="{{ current_path }}">
+											<button class="delete-btn" type="submit">delete</button>
+										</form>
+									</td>
+								</tr>
+							{% endfor %}
+						</tbody>
+					</table>
+				</section>
+
+				<aside class="panel">
+					<div class="panel-title">Actions</div>
+					<form class="form" id="uploadForm" action="{{ url_for('ui_upload') }}" method="post" enctype="multipart/form-data">
+						<input type="hidden" name="current_path" value="{{ current_path }}">
+						<label for="upload_file">Upload files (multiple)</label>
+						<input id="upload_file" type="file" name="files" multiple>
+						<details class="folder-upload-details">
+							<summary>Upload folder</summary>
+							<div class="folder-upload-fields">
+								<label for="upload_folder">Choose folder files</label>
+								<input id="upload_folder" type="file" name="folder_files" webkitdirectory directory multiple>
+							</div>
+						</details>
+						<div id="dropzone" class="dropzone">
+							Drag and drop files or folders here
+							<div class="dropzone-status" id="dropzoneStatus">No dropped items yet</div>
+						</div>
+						<div class="upload-results" id="uploadResults" style="display:none;">
+							<div class="title">Upload Status</div>
+							<ul id="uploadResultsList"></ul>
+						</div>
+						<button class="btn" type="submit">Upload Selection</button>
+					</form>
+
+					<form class="form" action="{{ url_for('ui_mkdir') }}" method="post">
+						<input type="hidden" name="current_path" value="{{ current_path }}">
+						<label for="folder_name">Create folder</label>
+						<input id="folder_name" type="text" name="folder_name" placeholder="example-folder" required>
+						<button class="btn" type="submit">Create Folder</button>
+					</form>
+
+					<div class="form small">
+						WebDAV clients can connect to the same host and use the root path. Supported methods include PROPFIND, PUT, MKCOL, DELETE, COPY and MOVE.
+					</div>
+				</aside>
+			</div>
+		</main>
+	</div>
+	<script>
+		(function () {
+			const root = document.documentElement;
+			const storedTheme = localStorage.getItem("ui-theme");
+			if (storedTheme === "dark" || storedTheme === "light") {
+				root.setAttribute("data-theme", storedTheme);
+			}
+		})();
+
+		(function () {
+			const form = document.getElementById("uploadForm");
+			const dropzone = document.getElementById("dropzone");
+			const status = document.getElementById("dropzoneStatus");
+			const fileInput = document.getElementById("upload_file");
+			const folderInput = document.getElementById("upload_folder");
+			const resultsBox = document.getElementById("uploadResults");
+			const resultsList = document.getElementById("uploadResultsList");
+			const themeToggle = document.getElementById("themeToggle");
+
+			if (!form || !dropzone || !status || !fileInput || !folderInput || !resultsBox || !resultsList) {
+				return;
+			}
+
+			function refreshThemeLabel() {
+				if (!themeToggle) {
+					return;
+				}
+				const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+				themeToggle.textContent = isDark ? "Light mode" : "Dark mode";
+			}
+
+			if (themeToggle) {
+				themeToggle.addEventListener("click", () => {
+					const root = document.documentElement;
+					const isDark = root.getAttribute("data-theme") === "dark";
+					const next = isDark ? "light" : "dark";
+					root.setAttribute("data-theme", next);
+					localStorage.setItem("ui-theme", next);
+					refreshThemeLabel();
+				});
+			}
+			refreshThemeLabel();
+
+			const droppedFiles = [];
+
+			function setStatus() {
+				if (droppedFiles.length === 0) {
+					status.textContent = "No dropped items yet";
+					return;
+				}
+				status.textContent = "Dropped " + droppedFiles.length + " item(s). They will be uploaded when you submit.";
+			}
+
+			function showResults(items, summary, hasFailures) {
+				resultsList.innerHTML = "";
+				resultsBox.style.display = "block";
+
+				const summaryLine = document.createElement("li");
+				summaryLine.className = hasFailures ? "upload-fail" : "upload-ok";
+				summaryLine.textContent = summary;
+				resultsList.appendChild(summaryLine);
+
+				for (const item of items) {
+					const row = document.createElement("li");
+					row.className = item.ok ? "upload-ok" : "upload-fail";
+					const icon = item.ok ? "OK" : "FAIL";
+					row.textContent = "[" + icon + "] " + item.source_name + " -> " + item.saved_as + " : " + item.message;
+					resultsList.appendChild(row);
+				}
+			}
+
+			function showPendingSummary() {
+				const pickerCount = (fileInput.files ? fileInput.files.length : 0) + (folderInput.files ? folderInput.files.length : 0);
+				const total = pickerCount + droppedFiles.length;
+				if (!total) {
+					resultsBox.style.display = "none";
+					return false;
+				}
+				resultsBox.style.display = "block";
+				resultsList.innerHTML = "";
+				const line = document.createElement("li");
+				line.className = "upload-pending";
+				line.textContent = "Uploading " + total + " item(s)...";
+				resultsList.appendChild(line);
+				return true;
+			}
+
+			function addFile(file, relativePath) {
+				if (relativePath) {
+					Object.defineProperty(file, "webkitRelativePath", {
+						value: relativePath,
+						configurable: true
+					});
+				}
+				droppedFiles.push(file);
+			}
+
+			async function traverseEntry(entry, parentPath) {
+				if (entry.isFile) {
+					await new Promise((resolve) => {
+						entry.file((file) => {
+							const rel = parentPath ? parentPath + "/" + file.name : file.name;
+							addFile(file, rel);
+							resolve();
+						});
+					});
+					return;
+				}
+
+				if (!entry.isDirectory) {
+					return;
+				}
+
+				const dirReader = entry.createReader();
+				const dirPath = parentPath ? parentPath + "/" + entry.name : entry.name;
+				while (true) {
+					const entries = await new Promise((resolve) => dirReader.readEntries(resolve));
+					if (!entries.length) {
+						break;
+					}
+					for (const child of entries) {
+						await traverseEntry(child, dirPath);
+					}
+				}
+			}
+
+			async function ingestDrop(dataTransfer) {
+				const items = Array.from(dataTransfer.items || []);
+				if (!items.length) {
+					for (const f of Array.from(dataTransfer.files || [])) {
+						addFile(f, "");
+					}
+					setStatus();
+					return;
+				}
+
+				for (const item of items) {
+					if (item.kind !== "file") {
+						continue;
+					}
+					const entry = item.webkitGetAsEntry ? item.webkitGetAsEntry() : null;
+					if (entry) {
+						await traverseEntry(entry, "");
+					} else {
+						const file = item.getAsFile();
+						if (file) {
+							addFile(file, "");
+						}
+					}
+				}
+				setStatus();
+			}
+
+			["dragenter", "dragover"].forEach((eventName) => {
+				dropzone.addEventListener(eventName, (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					dropzone.classList.add("active");
+				});
+			});
+
+			["dragleave", "drop"].forEach((eventName) => {
+				dropzone.addEventListener(eventName, (e) => {
+					e.preventDefault();
+					e.stopPropagation();
+					dropzone.classList.remove("active");
+				});
+			});
+
+			dropzone.addEventListener("drop", async (e) => {
+				await ingestDrop(e.dataTransfer);
+			});
+
+			form.addEventListener("submit", (e) => {
+				e.preventDefault();
+				if (!showPendingSummary()) {
+					return;
+				}
+				const fd = new FormData(form);
+				for (const file of droppedFiles) {
+					if (file.webkitRelativePath) {
+						fd.append("folder_files", file, file.webkitRelativePath);
+					} else {
+						fd.append("files", file, file.name);
+					}
+				}
+
+				fetch(form.action, {
+					method: "POST",
+					body: fd,
+					credentials: "same-origin",
+					headers: {
+						"X-Requested-With": "XMLHttpRequest",
+						"Accept": "application/json"
+					}
+				}).then(async (resp) => {
+					let data = null;
+					try {
+						data = await resp.json();
+					} catch (err) {
+						showResults([], "Upload failed: server returned non-JSON response.", true);
+						return;
+					}
+
+					const results = Array.isArray(data.results) ? data.results : [];
+					const summary = data.summary || "Upload completed.";
+					const failCount = Number(data.failed || 0);
+					showResults(results, summary, failCount > 0 || !resp.ok);
+
+					if (resp.ok && failCount === 0) {
+						setTimeout(() => {
+							window.location.reload();
+						}, 800);
+					}
+				}).catch(() => {
+					showResults([], "Upload failed: network or server error.", true);
+				});
+			});
+
+			fileInput.addEventListener("change", () => {
+				if (fileInput.files && fileInput.files.length > 0) {
+					status.textContent = "Selected " + fileInput.files.length + " file(s) from file picker.";
+				}
+			});
+
+			folderInput.addEventListener("change", () => {
+				if (folderInput.files && folderInput.files.length > 0) {
+					status.textContent = "Selected folder content with " + folderInput.files.length + " file(s).";
+				}
+			});
+		})();
+	</script>
+</body>
+</html>

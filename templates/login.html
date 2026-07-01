@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Sign In - Flask WebDAV UI</title>
+	<style>
+		:root {
+			--bg: #edf3fe;
+			--panel: #ffffffee;
+			--ink: #142746;
+			--ink-soft: #5b7093;
+			--line: #d8e3f7;
+			--accent-1: #0f56d9;
+			--accent-2: #2f7dff;
+			--danger: #a4283f;
+		}
+		:root[data-theme="dark"] {
+			--bg: #0f1726;
+			--panel: #172337f0;
+			--ink: #eaf2ff;
+			--ink-soft: #a8bbd8;
+			--line: #30435f;
+			--accent-1: #3c8cff;
+			--accent-2: #2f7dff;
+			--danger: #ff7b98;
+		}
+		* { box-sizing: border-box; }
+		body {
+			margin: 0;
+			min-height: 100vh;
+			display: grid;
+			place-items: center;
+			padding: 1rem;
+			font-family: "Nunito Sans", "Segoe UI", sans-serif;
+			color: var(--ink);
+			background:
+				radial-gradient(circle at 12% -8%, #84b2ff66 0, transparent 42%),
+				radial-gradient(circle at 88% 5%, #7da9ff55 0, transparent 35%),
+				var(--bg);
+		}
+		:root[data-theme="dark"] body {
+			background:
+				radial-gradient(circle at 12% -8%, #36568966 0, transparent 42%),
+				radial-gradient(circle at 88% 5%, #2e4f7d55 0, transparent 35%),
+				var(--bg);
+		}
+		.card {
+			width: min(420px, 100%);
+			background: var(--panel);
+			border: 1px solid var(--line);
+			border-radius: 16px;
+			padding: 1rem;
+			box-shadow: 0 16px 46px #1d53a21c;
+		}
+		.card-head {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 0.6rem;
+		}
+		.badge {
+			display: inline-block;
+			padding: 0.22rem 0.48rem;
+			border-radius: 999px;
+			font-size: 0.74rem;
+			font-weight: 800;
+			color: #1849a8;
+			background: #e5efff;
+			border: 1px solid #cdddff;
+		}
+		:root[data-theme="dark"] .badge {
+			color: #c0dbff;
+			background: #223a63;
+			border-color: #375a8f;
+		}
+		.theme-toggle {
+			display: inline-flex;
+			align-items: center;
+			justify-content: center;
+			padding: 0.4rem 0.66rem;
+			border-radius: 10px;
+			border: 1px solid var(--line);
+			background: var(--panel);
+			color: var(--ink);
+			font-size: 0.8rem;
+			font-weight: 700;
+			cursor: pointer;
+		}
+		.theme-toggle:hover {
+			background: #f3f7ff;
+		}
+		:root[data-theme="dark"] .theme-toggle:hover {
+			background: #22324b;
+		}
+		h1 {
+			margin: 0.55rem 0 0;
+			font-size: 1.35rem;
+		}
+		p {
+			margin: 0.55rem 0 0;
+			color: var(--ink-soft);
+			font-size: 0.92rem;
+		}
+		label {
+			display: block;
+			margin-top: 0.75rem;
+			margin-bottom: 0.24rem;
+			font-size: 0.85rem;
+			font-weight: 600;
+			color: var(--ink-soft);
+		}
+		input {
+			width: 100%;
+			padding: 0.58rem 0.65rem;
+			border: 1px solid var(--line);
+			border-radius: 10px;
+			font-size: 0.94rem;
+			background: #fff;
+		}
+		:root[data-theme="dark"] input {
+			background: #1c2b43;
+			color: var(--ink);
+		}
+		button {
+			margin-top: 0.9rem;
+			width: 100%;
+			padding: 0.62rem 0.8rem;
+			border: 0;
+			border-radius: 10px;
+			font-weight: 700;
+			cursor: pointer;
+			color: #fff;
+			background: linear-gradient(120deg, var(--accent-1), var(--accent-2));
+		}
+		.error {
+			margin-top: 0.75rem;
+			padding: 0.6rem;
+			border-radius: 9px;
+			border: 1px solid #f0c6ca;
+			background: #fff3f4;
+			color: var(--danger);
+			font-size: 0.88rem;
+		}
+	</style>
+</head>
+<body>
+	<div class="card">
+		<div class="card-head">
+			<span class="badge">OpenCloud Style UI</span>
+			<button class="theme-toggle" id="themeToggle" type="button">Dark mode</button>
+		</div>
+		<h1>Web UI Sign In</h1>
+		<p>Sign in using the same server credentials used for WebDAV.</p>
+		<form method="post" action="{{ url_for('ui_login_post') }}">
+			<input type="hidden" name="next" value="{{ next_path }}">
+			<label for="username">Username</label>
+			<input id="username" name="username" type="text" required>
+			<label for="password">Password</label>
+			<input id="password" name="password" type="password" required>
+			<button type="submit">Sign In</button>
+		</form>
+		{% if error %}
+			<div class="error">{{ error }}</div>
+		{% endif %}
+	</div>
+	<script>
+		(function () {
+			const root = document.documentElement;
+			const themeToggle = document.getElementById("themeToggle");
+			const storedTheme = localStorage.getItem("ui-theme");
+
+			if (storedTheme === "dark" || storedTheme === "light") {
+				root.setAttribute("data-theme", storedTheme);
+		}
+
+			function refreshLabel() {
+				if (!themeToggle) {
+					return;
+				}
+				const isDark = root.getAttribute("data-theme") === "dark";
+				themeToggle.textContent = isDark ? "Light mode" : "Dark mode";
+			}
+
+			if (themeToggle) {
+				themeToggle.addEventListener("click", () => {
+					const isDark = root.getAttribute("data-theme") === "dark";
+					const next = isDark ? "light" : "dark";
+					root.setAttribute("data-theme", next);
+					localStorage.setItem("ui-theme", next);
+					refreshLabel();
+				});
+			}
+
+			refreshLabel();
+		})();
+	</script>
+</body>
+</html>
