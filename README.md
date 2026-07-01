@@ -28,8 +28,8 @@ A lightweight Flask server that exposes a WebDAV-compatible endpoint and a brows
 ## Install
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .pywebdavenv
+source .pywebdavenv/bin/activate
 pip install -r requirements.txt
 ```
 
