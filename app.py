@@ -32,8 +32,31 @@ AMPACHE_SESSION_TTL_SECONDS = 12 * 60 * 60
 AMPACHE_API_VERSION = "6.0.0"
 AMPACHE_AUDIO_EXTS = {".mp3", ".flac", ".m4a", ".aac", ".ogg", ".wav", ".opus"}
 AMPACHE_SESSIONS = {}
+VERSION_DIR_NAME = "versions"
+LEGACY_VERSION_DIR_NAME = ".versions"
+MAX_VERSIONS_PER_FILE = 500
 
 DATA_ROOT.mkdir(parents=True, exist_ok=True)
+
+legacy_version_root = DATA_ROOT / LEGACY_VERSION_DIR_NAME
+current_version_root = DATA_ROOT / VERSION_DIR_NAME
+if legacy_version_root.exists() and legacy_version_root.is_dir() and not current_version_root.exists():
+		shutil.move(str(legacy_version_root), str(current_version_root))
+
+
+def _version_root() -> Path:
+		return DATA_ROOT / VERSION_DIR_NAME
+
+
+def _is_reserved_rel_path(rel_path: str) -> bool:
+		return (
+				rel_path == VERSION_DIR_NAME
+				or rel_path.startswith(f"{VERSION_DIR_NAME}/")
+				or rel_path == LEGACY_VERSION_DIR_NAME
+				or rel_path.startswith(f"{LEGACY_VERSION_DIR_NAME}/")
+		)
+
+
 def _auth_failed(message: str = "Authentication required", realm: str = "Flask-WebDAV") -> Response:
 		response = Response(message, status=401)
 		response.headers["WWW-Authenticate"] = f'Basic realm="{realm}"'
@@ -224,6 +247,8 @@ def _to_safe_rel_path(raw_path: str) -> str:
 				return ""
 		if normalized.startswith("../") or normalized == "..":
 				abort(400, "Invalid path")
+		if _is_reserved_rel_path(normalized):
+				abort(403, "Path not accessible")
 		return normalized
 
 
@@ -418,6 +443,106 @@ def _apply_source_mtime(destination: Path, modified_ms: int) -> bool:
 				return False
 
 
+def _version_bucket(rel_path: str) -> Path:
+		parent = posixpath.dirname(rel_path)
+		name = posixpath.basename(rel_path)
+		base = _version_root()
+		if parent and parent != ".":
+				base = base / Path(parent)
+		return base / name
+
+
+def _prune_versions(bucket: Path) -> None:
+		if not bucket.exists() or not bucket.is_dir():
+				return
+		versions = [p for p in bucket.iterdir() if p.is_file()]
+		versions.sort(key=lambda p: p.name, reverse=True)
+		for stale in versions[MAX_VERSIONS_PER_FILE:]:
+				stale.unlink(missing_ok=True)
+
+
+def _snapshot_file_version(file_rel_path: str, reason: str) -> None:
+		if not file_rel_path:
+				return
+		if _is_reserved_rel_path(file_rel_path):
+				return
+
+		source = _full_path(file_rel_path)
+		if not source.exists() or not source.is_file():
+				return
+
+		timestamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+		reason_token = "".join(ch for ch in (reason or "update") if ch.isalnum() or ch in ("-", "_"))[:20] or "update"
+		version_id = f"{timestamp}__{reason_token}.bak"
+		bucket = _version_bucket(file_rel_path)
+		bucket.mkdir(parents=True, exist_ok=True)
+		shutil.copy2(source, bucket / version_id)
+		_prune_versions(bucket)
+
+
+def _list_file_versions(file_rel_path: str) -> list[dict]:
+		bucket = _version_bucket(file_rel_path)
+		if not bucket.exists() or not bucket.is_dir():
+				return []
+
+		items = []
+		for entry in sorted(bucket.iterdir(), key=lambda p: p.name, reverse=True):
+				if not entry.is_file():
+						continue
+				parts = entry.name.split("__", 1)
+				reason = "unknown"
+				if len(parts) == 2:
+					reason = parts[1].rsplit(".", 1)[0]
+				stat = entry.stat()
+				items.append({
+						"id": entry.name,
+						"size": stat.st_size,
+						"mtime": dt.datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M:%S"),
+						"reason": reason,
+				})
+		return items
+
+
+def _restore_file_version(file_rel_path: str, version_id: str) -> None:
+		bucket = _version_bucket(file_rel_path)
+		version_name = os.path.basename((version_id or "").strip())
+		if not version_name:
+				abort(400, "Version id is required")
+
+		version_file = (bucket / version_name).resolve()
+		try:
+				version_file.relative_to(bucket.resolve())
+		except ValueError:
+				abort(403, "Invalid version path")
+
+		if not version_file.exists() or not version_file.is_file():
+				abort(404)
+
+		target = _full_path(file_rel_path)
+		target.parent.mkdir(parents=True, exist_ok=True)
+		if target.exists() and target.is_file():
+				_snapshot_file_version(file_rel_path, "restore")
+		shutil.copy2(version_file, target)
+
+
+def _get_version_file(file_rel_path: str, version_id: str) -> Path:
+		bucket = _version_bucket(file_rel_path)
+		version_name = os.path.basename((version_id or "").strip())
+		if not version_name:
+				abort(400, "Version id is required")
+
+		version_file = (bucket / version_name).resolve()
+		try:
+				version_file.relative_to(bucket.resolve())
+		except ValueError:
+				abort(403, "Invalid version path")
+
+		if not version_file.exists() or not version_file.is_file():
+				abort(404)
+
+		return version_file
+
+
 def _store_uploaded_file(upload, target_dir: Path, rel_path: str, preserve_tree: bool, mtime_lookup: dict[tuple[bool, str], int] | None = None) -> dict:
 		source_name = upload.filename or "<unnamed>"
 		try:
@@ -428,6 +553,9 @@ def _store_uploaded_file(upload, target_dir: Path, rel_path: str, preserve_tree:
 				else:
 						saved_rel = f"{rel_path}/{safe_name}" if rel_path else safe_name
 						destination = target_dir / safe_name
+
+				if destination.exists() and destination.is_file():
+						_snapshot_file_version(saved_rel, "upload")
 
 				destination.parent.mkdir(parents=True, exist_ok=True)
 				upload.save(destination)
@@ -498,6 +626,8 @@ def ui_list(subpath: str = ""):
 		entries = []
 		for item in sorted(current.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
 				child_rel = f"{rel_path}/{item.name}" if rel_path else item.name
+				if _is_reserved_rel_path(child_rel):
+						continue
 				entries.append(_entry_payload(item, child_rel))
 
 		parent_path = None
@@ -506,10 +636,20 @@ def ui_list(subpath: str = ""):
 				if parent_path == ".":
 						parent_path = ""
 
+		breadcrumbs = [{"name": "/", "path": ""}]
+		if rel_path:
+				acc = []
+				for part in rel_path.split("/"):
+						if not part:
+								continue
+						acc.append(part)
+						breadcrumbs.append({"name": part, "path": "/".join(acc)})
+
 		return render_template(
 				"index.html",
 				current_path=rel_path,
 				parent_path=parent_path,
+				breadcrumbs=breadcrumbs,
 				entries=entries,
 				webdav_base=request.url_root.rstrip("/"),
 		)
@@ -653,8 +793,52 @@ def ui_delete():
 		target = _full_path(target_rel)
 		if not target.exists():
 				abort(404)
+		if target.is_file():
+				_snapshot_file_version(target_rel, "delete")
 		_delete_path(target)
 		return redirect(url_for("ui_list", subpath=current_rel))
+
+
+@app.get("/ui/versions/<path:file_path>")
+@requires_ui_auth
+def ui_versions(file_path: str):
+		rel_path = _to_safe_rel_path(file_path)
+		full = _full_path(rel_path)
+		if not full.exists() or not full.is_file():
+				abort(404)
+
+		versions = _list_file_versions(rel_path)
+		current_path = posixpath.dirname(rel_path)
+		if current_path == ".":
+				current_path = ""
+
+		return render_template(
+				"versions.html",
+				file_rel_path=rel_path,
+				file_name=full.name,
+				current_path=current_path,
+				versions=versions,
+		)
+
+
+@app.post("/ui/versions/restore")
+@requires_ui_auth
+def ui_restore_version():
+		file_rel_path = _to_safe_rel_path(request.form.get("file_rel_path", ""))
+		version_id = request.form.get("version_id", "")
+		_restore_file_version(file_rel_path, version_id)
+		return redirect(url_for("ui_versions", file_path=file_rel_path))
+
+
+@app.get("/ui/versions/download/<path:file_path>")
+@requires_ui_auth
+def ui_download_version(file_path: str):
+		rel_path = _to_safe_rel_path(file_path)
+		version_id = request.args.get("version_id", "")
+		version_file = _get_version_file(rel_path, version_id)
+
+		download_name = f"{Path(rel_path).name}.{version_file.name}"
+		return send_file(version_file, as_attachment=True, download_name=download_name)
 
 
 @app.get("/ui/download/<path:file_path>")
@@ -664,7 +848,7 @@ def ui_download(file_path: str):
 		full = _full_path(rel_path)
 		if not full.exists() or not full.is_file():
 				abort(404)
-		return send_file(full, as_attachment=True)
+		return send_file(full, as_attachment=True, last_modified=full.stat().st_mtime, conditional=True)
 
 
 @app.get("/ui/download-folder/<path:folder_path>")
@@ -707,6 +891,8 @@ def webdav(req_path: str):
 				return Response(status=201)
 
 		if method == "PUT":
+				if target.exists() and target.is_file():
+						_snapshot_file_version(rel_path, "put")
 				target.parent.mkdir(parents=True, exist_ok=True)
 				with target.open("wb") as out:
 						out.write(request.get_data())
@@ -715,6 +901,8 @@ def webdav(req_path: str):
 		if method == "DELETE":
 				if not target.exists():
 						return Response(status=404)
+				if target.is_file():
+						_snapshot_file_version(rel_path, "delete")
 				_delete_path(target)
 				return Response(status=204)
 
@@ -733,6 +921,8 @@ def webdav(req_path: str):
 				if dest_path.exists():
 						if not overwrite:
 								return Response(status=412)
+						if dest_path.is_file():
+								_snapshot_file_version(dest_rel, method.lower())
 						_delete_path(dest_path)
 
 				if not dest_path.parent.exists():
@@ -753,7 +943,7 @@ def webdav(req_path: str):
 						return Response(status=404)
 				if target.is_dir():
 						return Response(status=200)
-				return send_file(target, as_attachment=False)
+				return send_file(target, as_attachment=False, last_modified=target.stat().st_mtime, conditional=True)
 
 		return Response(status=405)
 
