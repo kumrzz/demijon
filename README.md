@@ -7,14 +7,16 @@ A lightweight Flask server that exposes a WebDAV-compatible endpoint and a brows
 - Basic auth for both WebDAV and browser UI
 - Web UI at `/ui/` for:
   - browse folders
-  - upload multiple files
+  - upload multiple files, modifiedtime preserved
   - upload full folders (directory tree)
   - drag-and-drop files and folders
   - per-file upload success/failure status in the operations panel
-  - download files
+  - download files, modifiedtime preserved
   - download folders as zip
   - create folders
   - delete files/folders
+  - restore prior versions of files
+- Ampache access
 - WebDAV methods:
   - `OPTIONS`
   - `PROPFIND` (Depth `0` and `1`)
@@ -37,7 +39,7 @@ pip install -r requirements.txt
 
 ```bash
 export WEBDAV_USERNAME=admin
-export WEBDAV_PASSWORD=admin
+export WEBDAV_PASSWORD=thisisaweakpaswordchangeitnow
 export WEBDAV_ROOT=./data
 python app.py
 ```
